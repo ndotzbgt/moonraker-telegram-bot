@@ -360,20 +360,6 @@ class Klippy:
 
         return res
 
-    def make_request_sync(self, method, url_path, json=None, headers=None, files=None, timeout=30) -> httpx.Response:
-        _headers = headers if headers else self._headers
-        res = self._client_sync.request(method, f"{self._host}{url_path}", content=orjson.dumps(json) if json else None, headers=_headers, files=files, timeout=timeout)
-        if res.status_code == 401:  # Unauthorized
-            logger.debug("JWT token expired, refreshing...")
-            self._refresh_moonraker_token_sync()
-            res = self._client_sync.request(method, f"{self._host}{url_path}", content=orjson.dumps(json) if json else None, headers=_headers, files=files, timeout=timeout)
-
-        try:
-            res.raise_for_status()
-        except httpx.HTTPError as err:
-            logger.error(err)
-
-        return res
 
     async def check_connection(self) -> str:
         connected = False

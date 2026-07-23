@@ -331,23 +331,9 @@ class Notifier:
             finally:
                 self._bzz_mess_id = 0
 
-    def _schedule_notification(self, message: str = "", schedule: bool = False, finish: bool = False) -> None:  # pylint: disable=W0613
-        mess = escape_markdown(self._klippy.get_print_stats(message), version=2)
-        if self._last_m117_status and "m117_status" in self._message_parts:
-            mess += f"{escape_markdown(self._last_m117_status, version=2)}\n"
-        if self._last_tgnotify_status and "tgnotify_status" in self._message_parts:
-            mess += f"{escape_markdown(self._last_tgnotify_status, version=2)}\n"
-        if "last_update_time" in self._message_parts:
-            mess += f"_Last update at {datetime.now():%H:%M:%S}_"
-
-        self._sched.add_job(
-            self._notify,
-            kwargs={"message": mess, "silent": self._silent_progress, "group_only": self._group_only, "finish": finish},
-            misfire_grace_time=180,
-            coalesce=False,
-            max_instances=6,
-            replace_existing=False,
-        )
+    async def _schedule_notification(self, message: str = "", schedule: bool = False, finish: bool = False) -> None:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(self._executors_pool, self._notify, message, schedule, finish)
 
         # if schedule:
         #     self._sched.add_job(

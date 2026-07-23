@@ -331,25 +331,23 @@ class Notifier:
             finally:
                 self._bzz_mess_id = 0
 
-    async def _schedule_notification(self, message: str = "", schedule: bool = False, finish: bool = False) -> None:
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(self._executors_pool, self._notify, message, schedule, finish)
-
-        # if schedule:
-        #     self._sched.add_job(
-        #         self._notify,
-        #         kwargs={
-        #             "message": mess,
-        #             "silent": self._silent_progress,
-        #             "group_only": self._group_only,
-        #         },
-        #         misfire_grace_time=None,
-        #         coalesce=False,
-        #         max_instances=6,
-        #         replace_existing=False,
-        #     )
-        # else:
-        #     self._notify(mess, self._silent_progress, self._group_only)
+    def _schedule_notification(self, message: str = "", schedule: bool = False, finish: bool = False) -> None:
+        if schedule:
+            self._sched.add_job(
+                self._notify,
+                kwargs={
+                    "message": message,
+                    "silent": self._silent_progress,
+                    "group_only": self._group_only,
+                    "finish": finish,
+                },
+                misfire_grace_time=None,
+                coalesce=False,
+                max_instances=6,
+                replace_existing=False,
+            )
+        else:
+            self._notify(message, self._silent_progress, self._group_only, finish=finish)
 
     def schedule_notification(self, progress: int = 0, position_z: int = 0) -> None:
         if not self._klippy.printing or self._klippy.printing_duration <= 0.0 or (self._height == 0 and self._percent == 0):

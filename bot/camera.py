@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 def cam_light_toggle(func):
     @wraps(func)
-    def wrapper(self, *args, **kwargs):
+    async def wrapper(self, *args, **kwargs):
         self.use_light()
 
         if self.light_timeout > 0 and self.light_device and not self.light_device.device_state and not self.light_lock.locked():
@@ -46,13 +46,13 @@ def cam_light_toggle(func):
             self.light_lock.acquire()
             self.light_need_off = True
             self.light_device.switch_device_sync(True)
-            time.sleep(self.light_timeout)
+            await asyncio.sleep(self.light_timeout)
             self.light_timer_event.set()
 
         self.light_timer_event.wait()
 
         # Todo: maybe add try block?
-        result = func(self, *args, **kwargs)
+        result = await func(self, *args, **kwargs)
 
         self.free_light()
 
@@ -355,6 +355,8 @@ class Camera:
     async def take_video(self) -> Tuple[BytesIO, BytesIO, int, int]:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(self._executors_pool, self._take_video_sync)
+
+    def _take_video_sync(self) -> Tuple[BytesIO, BytesIO, int, int]:
         def process_video_frame(frame_local):
             if self._flip_vertically:
                 frame_local = numpy.flipud(frame_local)
@@ -651,6 +653,7 @@ class MjpegCamera(Camera):
         self._raw_frame_extension: str = "jpeg"
         self._host = config.camera.host
         self._host_snapshot = config.camera.host_snapshot if config.camera.host_snapshot else self._host.replace("stream", "snapshot")
+        self._client = httpx.AsyncClient(verify=False)
 
         self._rotate_code_mjpeg: Image.Transpose
         if config.camera.rotate == "90_cw":
@@ -673,12 +676,12 @@ class MjpegCamera(Camera):
         return img
 
     @cam_light_toggle
-    def take_photo(self, ndarr: ndarray = None, force_rotate: bool = True) -> BytesIO:
+    async def take_photo(self, ndarr: ndarray = None, force_rotate: bool = True) -> BytesIO:
         bio = BytesIO()
         os_nice(15)
         try:
             # Todo: speedup coonections?
-            response = httpx.get(f"{self._host_snapshot}", timeout=5, verify=False)
+            response = await self._client.get(f"{self._host_snapshot}", timeout=5)
 
             os_nice(15)
             if response.is_success and response.headers["Content-Type"] == "image/jpeg":
@@ -702,11 +705,11 @@ class MjpegCamera(Camera):
         bio.seek(0)
         return bio
 
-    def take_lapse_photo(self, gcode: str = "") -> None:
+    async def take_lapse_photo(self, gcode: str = "") -> None:
         logger.debug("Take_lapse_photo called with gcode `%s`", gcode)
         # Todo: check for space available?
         Path(self.lapse_dir).mkdir(parents=True, exist_ok=True)
-        with self.take_photo(force_rotate=False) as photo:
+        with await self.take_photo(force_rotate=False) as photo:
             if gcode:
                 try:
                     self._klippy.execute_gcode_script_sync(gcode.strip())
@@ -729,7 +732,7 @@ class MjpegCamera(Camera):
         return res[:, :, [2, 1, 0]].copy()
 
     # Todo: apply frames rotation during ffmpeg call!
-    def _get_frame(self, path: str):
+    async def _get_frame(self, path: str):
         with open(path, "rb") as image_file:
             buff = BytesIO(image_file.read())
             res = self._image_to_frame(buff)
@@ -737,8 +740,11 @@ class MjpegCamera(Camera):
             return res
 
     @cam_light_toggle
-    def take_video(self) -> Tuple[BytesIO, BytesIO, int, int]:
+    async def take_video(self) -> Tuple[BytesIO, BytesIO, int, int]:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self._executors_pool, self._take_video_sync)
 
+    def _take_video_sync(self) -> Tuple[BytesIO, BytesIO, int, int]:
         with self._camera_lock:
             os_nice(15)
             frame = self._image_to_frame(self.take_photo(force_rotate=False))

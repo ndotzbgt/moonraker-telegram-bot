@@ -415,6 +415,27 @@ class WebSocketHelper:
         print("lalal")
 
     async def run_forever_async(self):
+        async for websocket in connect(
+            uri=f"{self._protocol}://{self._host}:{self._port}/websocket{await self._klippy.get_one_shot_token()}",
+            process_exception=self.on_error,
+            open_timeout=5.0,
+            ping_interval=10.0,  # as moonraker
+            ping_timeout=30.0,  # as moonraker
+            close_timeout=5.0,
+            max_queue=1024,
+            logger=logger,
+            ssl=self._ssl_context,
+        ):
+            try:
+                self._ws = websocket
+                self._scheduler.add_job(self.reshedule, "interval", seconds=2, id="ws_reschedule", replace_existing=True, coalesce=True, misfire_grace_time=10)
+                async for message in self._ws:
+                    await self.websocket_to_message(message)
+            except Exception as ex:
+                logger.error(ex)
+                await self._klippy.set_connected(False)
+                if self._scheduler.get_job("ws_reschedule"):
+                    self._scheduler.remove_job("ws_reschedule")
         # Todo: use headers instead of inline token
         async for websocket in connect(
             uri=f"{self._protocol}://{self._host}:{self._port}/websocket{await self._klippy.get_one_shot_token()}",

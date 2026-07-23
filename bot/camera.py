@@ -290,7 +290,8 @@ class Camera:
         cv2.setNumThreads(self._threads)
 
     @cam_light_toggle
-    def _take_raw_frame(self, rgb: bool = True) -> ndarray:
+    async def _take_raw_frame(self, rgb: bool = True) -> ndarray:
+        await asyncio.sleep(0)  # Yield control to event loop
         with self._camera_lock:
             st_time = time.time()
             self._init_cam()
@@ -351,7 +352,9 @@ class Camera:
         return bio
 
     @cam_light_toggle
-    def take_video(self) -> Tuple[BytesIO, BytesIO, int, int]:
+    async def take_video(self) -> Tuple[BytesIO, BytesIO, int, int]:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self._executors_pool, self._take_video_sync)
         def process_video_frame(frame_local):
             if self._flip_vertically:
                 frame_local = numpy.flipud(frame_local)

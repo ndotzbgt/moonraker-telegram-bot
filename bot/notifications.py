@@ -350,7 +350,7 @@ class Notifier:
             self._notify(message, self._silent_progress, self._group_only, finish=finish)
 
     def schedule_notification(self, progress: int = 0, position_z: int = 0) -> None:
-        if not self._klippy.printing or self._klippy.printing_duration <= 0.0 or (self._height == 0 and self._percent == 0):
+        if not self._klippy.printing or (self._height == 0 and self._percent == 0):
             return
 
         notify = False
@@ -372,7 +372,7 @@ class Notifier:
             self._schedule_notification(schedule=True)
 
     def _notify_by_time(self) -> None:
-        if not self._klippy.printing or self._klippy.printing_duration <= 0.0:
+        if not self._klippy.printing:
             return
         self._schedule_notification()
 

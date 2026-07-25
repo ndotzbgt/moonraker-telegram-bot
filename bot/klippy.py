@@ -494,7 +494,7 @@ class Klippy:
     def _get_printing_file_info(self, message_pre: str = "") -> str:
         message = f"Printing: {self.printing_filename} \n" if not message_pre else f"{message_pre}: {self.printing_filename} \n"
         if "progress" in self._message_parts:
-            message += f"Progress {round(self.printing_progress * 100, 0)}%"
+            message += f"Progress {round(max(self.printing_progress, self.vsd_progress) * 100, 0)}%"
         if "height" in self._message_parts:
             message += f", height: {round(self.printing_height, 2)}mm\n" if self.printing_height > 0.0 else "\n"
         if self.filament_total > 0.0:

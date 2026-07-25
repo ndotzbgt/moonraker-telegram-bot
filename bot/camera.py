@@ -354,7 +354,7 @@ class Camera:
     @cam_light_toggle
     async def take_video(self) -> Tuple[BytesIO, BytesIO, int, int]:
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(self._executors_pool, self._take_video_sync)
+        return await loop.run_in_executor(None, self._take_video_sync)
 
     def _take_video_sync(self) -> Tuple[BytesIO, BytesIO, int, int]:
         def process_video_frame(frame_local):
@@ -654,6 +654,7 @@ class MjpegCamera(Camera):
         self._host = config.camera.host
         self._host_snapshot = config.camera.host_snapshot if config.camera.host_snapshot else self._host.replace("stream", "snapshot")
         self._client = httpx.AsyncClient(verify=False)
+        self._client_sync = httpx.Client(verify=False)
 
         self._rotate_code_mjpeg: Image.Transpose
         if config.camera.rotate == "90_cw":
@@ -742,12 +743,37 @@ class MjpegCamera(Camera):
     @cam_light_toggle
     async def take_video(self) -> Tuple[BytesIO, BytesIO, int, int]:
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(self._executors_pool, self._take_video_sync)
+        return await loop.run_in_executor(None, self._take_video_sync)
+
+    def _get_mjpeg_photo(self, force_rotate: bool = False) -> BytesIO:
+        bio = BytesIO()
+        os_nice(15)
+        try:
+            response = self._client_sync.get(f"{self._host_snapshot}", timeout=5)
+            os_nice(15)
+            if response.is_success and response.headers["Content-Type"] == "image/jpeg":
+                if force_rotate:
+                    img = self._rotate_img(Image.open(BytesIO(response.content)).convert("RGB"))
+                    img.save(bio, format="JPEG")
+                    img.close()
+                    del img
+                else:
+                    bio.write(response.content)
+            else:
+                response.raise_for_status()
+        except HTTPError as err:
+            logger.error("Streamer snapshot get failed\n%s", err)
+            if force_rotate:
+                with Image.open("../imgs/nosignal.png").convert("RGB") as img:
+                    img.save(bio, format="JPEG")
+        os_nice(0)
+        bio.seek(0)
+        return bio
 
     def _take_video_sync(self) -> Tuple[BytesIO, BytesIO, int, int]:
         with self._camera_lock:
             os_nice(15)
-            frame = self._image_to_frame(self.take_photo(force_rotate=False))
+            frame = self._image_to_frame(self._get_mjpeg_photo(force_rotate=False))
             height, width, channels = frame.shape
             thumb_bio = self._create_thumb(frame)
             del frame, channels

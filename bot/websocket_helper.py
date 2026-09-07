@@ -1,3 +1,4 @@
+import asyncio
 from functools import wraps
 import logging
 import os
@@ -23,12 +24,12 @@ logger = logging.getLogger(__name__)
 
 def websocket_alive(func):
     @wraps(func)
-    def wrapper(self, *args, **kwargs):
+    async def wrapper(self, *args, **kwargs):
         if self.websocket is None:
             logger.warning("Websocket call `%s` on non initialized ws", func.__name__)
             return None
         else:
-            return func(self, *args, **kwargs)
+            return await func(self, *args, **kwargs)
 
     return wrapper
 
@@ -410,9 +411,8 @@ class WebSocketHelper:
         messages = list(map(lambda el: el.split(" - b'")[-1].replace("'\n", ""), wslines))
 
         for mes in messages:
-            self.websocket_to_message(mes)
+            asyncio.run(self.websocket_to_message(mes))
             time.sleep(0.01)
-        print("lalal")
 
     async def run_forever_async(self):
         async for websocket in connect(

@@ -275,6 +275,7 @@ class Klippy:
         # Todo: add response status check!
         if not response.is_success:
             logger.warning("bad response for file request %s", response.status_code)
+            return
         resp = orjson.loads(response.text)["result"]
         self._printing_filename = new_value
         self.file_estimated_time = resp["estimated_time"] if resp.get("estimated_time") else 0.0
@@ -378,7 +379,7 @@ class Klippy:
             except Exception as ex:
                 logger.error(ex, exc_info=True)
             retries += 1
-            time.sleep(1)
+            await asyncio.sleep(1)
         return f"Connection failed. {last_reason}"
 
     def update_sensor(self, name: str, value) -> None:
@@ -619,7 +620,7 @@ class Klippy:
     async def add_bot_announcements_feed(self):
         await self.make_request("POST", "/server/announcements/feed?name=moonraker-telegram-bot")
 
-    # moonraker databse section
+    # moonraker database section
     async def get_param_from_db(self, param_name: str):
         res = await self.make_request("GET", f"/server/database/item?namespace={self._dbname}&key={param_name}")
         if res.is_success:
@@ -649,4 +650,4 @@ class Klippy:
             await self.execute_gcode_script(f"SET_GCODE_VARIABLE MACRO=bot_data VARIABLE=lapse_path VALUE='\"{path}\"'")
 
         else:
-            logger.error("Marco %s not defined", self._DATA_MACRO)
+            logger.error("Macro %s not defined", self._DATA_MACRO)

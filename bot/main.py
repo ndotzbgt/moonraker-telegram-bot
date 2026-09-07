@@ -12,6 +12,7 @@ from logging.handlers import RotatingFileHandler
 import os
 from pathlib import Path
 import re
+import shlex
 import signal
 import socket
 import subprocess
@@ -43,8 +44,6 @@ with contextlib.suppress(ImportError):
     import uvloop  # type: ignore
 
     asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
-
-sys.modules["json"] = orjson
 
 
 class SensitiveFormatter(logging.Formatter):
@@ -149,7 +148,7 @@ async def unknown_chat(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
 async def status_no_confirm(effective_message: Message) -> None:
     if klippy.printing and not configWrap.notifications.group_only:
         notifier.update_status()
-        time.sleep(configWrap.camera.light_timeout + 1.5)
+        await asyncio.sleep(configWrap.camera.light_timeout + 1.5)
         await effective_message.delete()
     else:
         mess = await klippy.get_status()
@@ -393,18 +392,23 @@ async def bot_restart(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
 def prepare_log_files() -> tuple[List[str], bool, Optional[str]]:
     dmesg_success = True
     dmesg_error = None
+    log_path = shlex.quote(configWrap.bot_config.log_path)
 
-    if Path(f"{configWrap.bot_config.log_path}/dmesg.txt").exists():
-        Path(f"{configWrap.bot_config.log_path}/dmesg.txt").unlink()
+    dmesg_path = Path(f"{configWrap.bot_config.log_path}/dmesg.txt")
+    if dmesg_path.exists():
+        dmesg_path.unlink()
 
-    dmesg_res = subprocess.run(f"dmesg -T > {configWrap.bot_config.log_path}/dmesg.txt", shell=True, executable="/bin/bash", check=False, capture_output=True)
-    if dmesg_res.returncode != 0:
+    dmesg_res = subprocess.run(["dmesg", "-T"], check=False, capture_output=True)
+    if dmesg_res.returncode == 0:
+        dmesg_path.write_bytes(dmesg_res.stdout)
+    else:
         logger.warning("dmesg file creation error: %s %s", dmesg_res.stdout.decode("utf-8"), dmesg_res.stderr.decode("utf-8"))
         dmesg_error = dmesg_res.stderr.decode("utf-8")
         dmesg_success = False
 
-    if Path(f"{configWrap.bot_config.log_path}/debug.txt").exists():
-        Path(f"{configWrap.bot_config.log_path}/debug.txt").unlink()
+    debug_path = Path(f"{configWrap.bot_config.log_path}/debug.txt")
+    if debug_path.exists():
+        debug_path.unlink()
 
     commands = [
         "lsb_release -a",
@@ -419,12 +423,13 @@ def prepare_log_files() -> tuple[List[str], bool, Optional[str]]:
         "ip --details --statistics link show dev can0",
     ]
     for command in commands:
-        subprocess.run(
-            f'echo >> {configWrap.bot_config.log_path}/debug.txt;echo "{command}" >> {configWrap.bot_config.log_path}/debug.txt;{command} >> {configWrap.bot_config.log_path}/debug.txt',
-            shell=True,
-            executable="/bin/bash",
-            check=False,
-        )
+        result = subprocess.run(command, shell=True, executable="/bin/bash", check=False, capture_output=True)
+        with open(debug_path, "a", encoding="utf-8") as debug_file:
+            debug_file.write(f"\n{command}\n")
+            if result.stdout:
+                debug_file.write(result.stdout.decode("utf-8", errors="replace"))
+            if result.stderr:
+                debug_file.write(result.stderr.decode("utf-8", errors="replace"))
 
     files = ["/boot/config.txt", "/boot/cmdline.txt", "/boot/armbianEnv.txt", "/boot/orangepiEnv.txt", "/boot/BoardEnv.txt", "/boot/env.txt"]
     with open(configWrap.bot_config.log_path + "/debug.txt", mode="a", encoding="utf-8") as debug_file:
@@ -535,8 +540,9 @@ async def restart_bot() -> None:
 async def power_toggle_no_confirm(effective_message: Message) -> None:
     await effective_message.get_bot().send_chat_action(chat_id=configWrap.secrets.chat_id, action=ChatAction.TYPING)
     if psu_power_device:
+        power_state = "Off" if psu_power_device.device_state else "On"
         await effective_message.reply_text(
-            "Power " + "Off" if psu_power_device.device_state else "On" + " printer?",
+            f"Power {power_state} printer?",
             reply_markup=confirm_keyboard("power_off_printer" if psu_power_device.device_state else "power_on_printer"),
             disable_notification=notifier.silent_commands,
             quote=True,
@@ -595,7 +601,7 @@ async def button_lapse_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         logger.warning("Undefined effective message or bot or query")
         return
     query = update.callback_query
-    if query.message is None or not query.message.is_accessible or not isinstance(query.message, Message):
+    if query.message is None or not isinstance(query.message, Message):
         logger.error("Undefined callback_query.message for %s", query.to_json())
         return
     if query.message.reply_markup is None:
@@ -626,7 +632,7 @@ async def print_file_dialog_handler(update: Update, context: ContextTypes.DEFAUL
         logger.warning("Undefined effective message or bot or query")
         return
     query = update.callback_query
-    if query.message is None or not query.message.is_accessible or not isinstance(query.message, Message):
+    if query.message is None or not isinstance(query.message, Message):
         logger.error("Undefined callback_query.message for %s", query.to_json())
         return
     if query.message.reply_markup is None:
@@ -676,7 +682,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         logger.error("Undefined bot in callback_query")
         return
 
-    if query.message is None or not query.message.is_accessible or not isinstance(query.message, Message):
+    if query.message is None or not isinstance(query.message, Message):
         logger.error("Undefined callback_query.message for %s", query.to_json())
         return
 
@@ -741,9 +747,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             parse_mode=ParseMode.HTML,
             quote=True,
         )
-    elif "macro:" in query.data:
-        command = query.data.replace("macro:", "")
-        await command_exec(effective_message=update.effective_message.reply_to_message, exec_text=f"Running macro: {command}", exec_func=ws_helper.execute_ws_gcode_script(command))
     elif "macroc:" in query.data:
         command = query.data.replace("macroc:", "")
         await query.edit_message_text(
@@ -751,6 +754,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             reply_markup=confirm_keyboard(f"macro:{command}"),
         )
         delete_query = False
+    elif "macro:" in query.data:
+        command = query.data.replace("macro:", "")
+        await command_exec(effective_message=update.effective_message.reply_to_message, exec_text=f"Running macro: {command}", exec_func=ws_helper.execute_ws_gcode_script(command))
     elif "gcode_files_offset:" in query.data:
         offset = int(query.data.replace("gcode_files_offset:", ""))
         await query.edit_message_text(
@@ -959,7 +965,7 @@ async def macros_handler(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     if command in klippy.macros_all:
         if configWrap.telegram_ui.is_present_in_require_confirmation(command):
             await update.effective_message.reply_text(
-                f"Execute marco {command}?",
+                f"Execute macro {command}?",
                 reply_markup=confirm_keyboard(f"macro:{command}"),
                 disable_notification=notifier.silent_commands,
                 quote=True,
@@ -1222,7 +1228,7 @@ def get_local_ip():
     try:
         sock.connect(("192.255.255.255", 1))
         ip_address = sock.getsockname()[0]
-    except:  # pylint: disable=W0702
+    except Exception:  # pylint: disable=W0702
         ip_address = "127.0.0.1"
     finally:
         sock.close()
@@ -1260,19 +1266,19 @@ def start_bot(bot_token, socks):
     application.add_handler(CallbackQueryHandler(button_handler))
     application.add_handler(CommandHandler("help", help_command, block=False))
     application.add_handler(CommandHandler("status", status, block=False))
-    application.add_handler(CommandHandler("ip", get_ip))
-    application.add_handler(CommandHandler("video", get_video))
-    application.add_handler(CommandHandler("pause", pause_printing))
-    application.add_handler(CommandHandler("resume", resume_printing))
-    application.add_handler(CommandHandler("cancel", cancel_printing))
-    application.add_handler(CommandHandler("power", power_toggle))
-    application.add_handler(CommandHandler("light", light_toggle))
-    application.add_handler(CommandHandler("emergency", emergency_stop))
-    application.add_handler(CommandHandler("shutdown", shutdown_host))
-    application.add_handler(CommandHandler("reboot", reboot_host))
-    application.add_handler(CommandHandler("bot_restart", bot_restart))
-    application.add_handler(CommandHandler("fw_restart", firmware_restart))
-    application.add_handler(CommandHandler("services", services_keyboard))
+    application.add_handler(CommandHandler("ip", get_ip, block=False))
+    application.add_handler(CommandHandler("video", get_video, block=False))
+    application.add_handler(CommandHandler("pause", pause_printing, block=False))
+    application.add_handler(CommandHandler("resume", resume_printing, block=False))
+    application.add_handler(CommandHandler("cancel", cancel_printing, block=False))
+    application.add_handler(CommandHandler("power", power_toggle, block=False))
+    application.add_handler(CommandHandler("light", light_toggle, block=False))
+    application.add_handler(CommandHandler("emergency", emergency_stop, block=False))
+    application.add_handler(CommandHandler("shutdown", shutdown_host, block=False))
+    application.add_handler(CommandHandler("reboot", reboot_host, block=False))
+    application.add_handler(CommandHandler("bot_restart", bot_restart, block=False))
+    application.add_handler(CommandHandler("fw_restart", firmware_restart, block=False))
+    application.add_handler(CommandHandler("services", services_keyboard, block=False))
     application.add_handler(CommandHandler("files", get_gcode_files, block=False))
     application.add_handler(CommandHandler("macros", get_macros, block=False))
     application.add_handler(CommandHandler("gcode", exec_gcode, block=False))
@@ -1298,7 +1304,7 @@ async def start_scheduler(context: ContextTypes.DEFAULT_TYPE):
         kwargs={"bot": context.bot},
     )
     # bot_updater.create_task(ws_helper.run_forever_async())
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     loop.create_task(ws_helper.run_forever_async())
 
 

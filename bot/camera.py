@@ -8,7 +8,6 @@ import math
 import os
 import pathlib
 from pathlib import Path
-import pickle
 import threading
 import time
 from typing import List, Tuple
@@ -270,7 +269,7 @@ class Camera:
                     prop = getattr(cv2, prop_name.upper())
                     self.cam_cam.set(prop, cv2.VideoWriter_fourcc(*value))
                 except AttributeError as err:
-                    logger.error(err, err)
+                    logger.error("Failed to set FOURCC property %s: %s", prop_name, err)
             else:
                 if value.isnumeric():
                     val = int(value)
@@ -282,7 +281,7 @@ class Camera:
                     prop = getattr(cv2, prop_name.upper())
                     self.cam_cam.set(prop, val)
                 except AttributeError as err:
-                    logger.error(err, err)
+                    logger.error("Failed to set property %s: %s", prop_name, err)
 
     def _init_cam(self):
         self.cam_cam.open(self._host)
@@ -397,7 +396,7 @@ class Camera:
                 if time.time() > time_last_frame + frame_time:
                     time_last_frame = time.time()
                     if success:
-                        frame_list.append(pickle.dumps(frame_loc))
+                        frame_list.append(frame_loc.copy())
                 del frame_loc
 
             self.cam_cam.release()
@@ -412,8 +411,7 @@ class Camera:
                 fps=res_fps,
             )
 
-            for el in frame_list:
-                loc_loc = pickle.loads(el)
+            for loc_loc in frame_list:
                 out.write(process_video_frame(loc_loc))
                 del loc_loc
 
@@ -493,7 +491,7 @@ class Camera:
             return self._target_fps
 
     def _get_frame(self, path: str):
-        return numpy.load(path, allow_pickle=True)["raw"]
+        return numpy.load(path)["raw"]
 
     def _create_timelapse(self, printing_filename: str, gcode_name: str, info_mess: Message, loop) -> Tuple[bytes, bytes, int, int, str, str]:
         if not printing_filename:
@@ -582,7 +580,7 @@ class Camera:
         with open(video_filepath, "rb") as fh:
             video_bytes = fh.read()
         if self._ready_dir and os.path.isdir(self._ready_dir):
-            asyncio.run_coroutine_threadsafe(info_mess.edit_text(text="Copy lapse to target ditectory"), loop).result()
+            asyncio.run_coroutine_threadsafe(info_mess.edit_text(text="Copy lapse to target directory"), loop).result()
             target_video_file = f"{self._ready_dir}/{printing_filename}.mp4"
             Path(target_video_file).parent.mkdir(parents=True, exist_ok=True)
             with open(target_video_file, "wb") as cpf:
@@ -653,8 +651,9 @@ class MjpegCamera(Camera):
         self._raw_frame_extension: str = "jpeg"
         self._host = config.camera.host
         self._host_snapshot = config.camera.host_snapshot if config.camera.host_snapshot else self._host.replace("stream", "snapshot")
-        self._client = httpx.AsyncClient(verify=False)
-        self._client_sync = httpx.Client(verify=False)
+        self._ssl_verify = config.bot_config.ssl_verify
+        self._client = httpx.AsyncClient(verify=self._ssl_verify)
+        self._client_sync = httpx.Client(verify=self._ssl_verify)
 
         self._rotate_code_mjpeg: Image.Transpose
         if config.camera.rotate == "90_cw":
@@ -681,7 +680,7 @@ class MjpegCamera(Camera):
         bio = BytesIO()
         os_nice(15)
         try:
-            # Todo: speedup coonections?
+            # Todo: speedup connections?
             response = await self._client.get(f"{self._host_snapshot}", timeout=5)
 
             os_nice(15)
@@ -794,7 +793,8 @@ class MjpegCamera(Camera):
                 if time.time() > time_last_frame + frame_time:
                     time_last_frame = time.time()
                     if frame_loc.getbuffer().nbytes > 0:
-                        frame_list.append(pickle.dumps(frame_loc))
+                        frame_loc.seek(0)
+                        frame_list.append(frame_loc.read())
                 del frame_loc
 
             res_fps = len(frame_list) / self._video_duration
@@ -808,7 +808,7 @@ class MjpegCamera(Camera):
             )
 
             for el in frame_list:
-                loc_loc = pickle.loads(el)
+                loc_loc = BytesIO(el)
                 out.write(self._image_to_frame(loc_loc))
                 del loc_loc
 

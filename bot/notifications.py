@@ -233,7 +233,7 @@ class Notifier:
     async def _notify(self, message: str, silent: bool, group_only: bool = False, manual: bool = False, finish: bool = False) -> None:
         try:
             if not self._cam_wrap.enabled:
-                await self._send_message(message, silent, manual)
+                await self._send_message(message, silent, group_only=group_only, manual=manual)
             else:
                 await self._send_photo(group_only, manual, message, silent)
         except Exception as ex:
@@ -347,7 +347,19 @@ class Notifier:
                 replace_existing=False,
             )
         else:
-            self._notify(message, self._silent_progress, self._group_only, finish=finish)
+            self._sched.add_job(
+                self._notify,
+                kwargs={
+                    "message": message,
+                    "silent": self._silent_progress,
+                    "group_only": self._group_only,
+                    "finish": finish,
+                },
+                misfire_grace_time=None,
+                coalesce=False,
+                max_instances=6,
+                replace_existing=False,
+            )
 
     def schedule_notification(self, progress: int = 0, position_z: int = 0) -> None:
         if not self._klippy.printing or (self._height == 0 and self._percent == 0):

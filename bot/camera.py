@@ -323,8 +323,12 @@ class Camera:
 
         return ndaarr
 
-    def take_photo(self, ndarr: ndarray = None) -> BytesIO:
-        img = Image.fromarray(ndarr) if ndarr is not None else Image.fromarray(self._take_raw_frame())
+    async def take_photo(self, ndarr: ndarray = None) -> BytesIO:
+        if ndarr is not None:
+            img = Image.fromarray(ndarr)
+        else:
+            raw_frame = await self._take_raw_frame()
+            img = Image.fromarray(raw_frame)
 
         os_nice(15)
         if img.mode != "RGB":
@@ -430,12 +434,12 @@ class Camera:
         video_bio.seek(0)
         return video_bio, thumb_bio, width, height
 
-    def take_lapse_photo(self, gcode: str = "") -> None:
+    async def take_lapse_photo(self, gcode: str = "") -> None:
         logger.debug("Take_lapse_photo called with gcode `%s`", gcode)
         # Todo: check for space available?
         Path(self.lapse_dir).mkdir(parents=True, exist_ok=True)
         # never add self in params there!
-        raw_frame = self._take_raw_frame(rgb=False)
+        raw_frame = await self._take_raw_frame(rgb=False)
 
         if gcode:
             try:
@@ -457,12 +461,12 @@ class Camera:
 
         # never add self in params there!
         if self._save_lapse_photos_as_images:
-            with self.take_photo(raw_frame_rgb) as photo:
-                # Fixme: jpeg_low is bad file extension!
-                filename = f"{self.lapse_dir}/{time.time()}.{self._img_extension}"
-                with open(filename, "wb") as outfile:
-                    outfile.write(photo.getvalue())
-                photo.close()
+            photo = await self.take_photo(raw_frame_rgb)
+            # Fixme: jpeg_low is bad file extension!
+            filename = f"{self.lapse_dir}/{time.time()}.{self._img_extension}"
+            with open(filename, "wb") as outfile:
+                outfile.write(photo.getvalue())
+            photo.close()
 
         raw_frame_rgb = None
         del raw_frame, raw_frame_rgb
@@ -677,6 +681,23 @@ class MjpegCamera(Camera):
 
     @cam_light_toggle
     async def take_photo(self, ndarr: ndarray = None, force_rotate: bool = True) -> BytesIO:
+        if ndarr is not None:
+            img = Image.fromarray(ndarr)
+            bio = BytesIO()
+            os_nice(15)
+            if img.mode != "RGB":
+                logger.warning("img mode is %s", img.mode)
+                img = img.convert("RGB")
+            if self._picture_quality == "high":
+                img.save(bio, "JPEG", quality=95, subsampling=0, optimize=True)
+            elif self._picture_quality == "low":
+                img.save(bio, "JPEG", quality=65, subsampling=0)
+            bio.seek(0)
+            img.close()
+            os_nice(0)
+            del img
+            return bio
+
         bio = BytesIO()
         os_nice(15)
         try:
@@ -709,19 +730,21 @@ class MjpegCamera(Camera):
         logger.debug("Take_lapse_photo called with gcode `%s`", gcode)
         # Todo: check for space available?
         Path(self.lapse_dir).mkdir(parents=True, exist_ok=True)
-        with await self.take_photo(force_rotate=False) as photo:
-            if gcode:
-                try:
-                    self._klippy.execute_gcode_script_sync(gcode.strip())
-                except Exception as ex:
-                    logger.error(ex)
+        photo = await self.take_photo(force_rotate=False)
+        if gcode:
+            try:
+                self._klippy.execute_gcode_script_sync(gcode.strip())
+            except Exception as ex:
+                logger.error(ex)
 
-            if photo.getbuffer().nbytes > 0:
-                filename = f"{self.lapse_dir}/{time.time()}.{self._img_extension}"
-                with open(filename, "wb") as outfile:
-                    outfile.write(photo.getvalue())
-            else:
-                self._lapse_missed_frames += 1
+        if photo.getbuffer().nbytes > 0:
+            filename = f"{self.lapse_dir}/{time.time()}.{self._img_extension}"
+            with open(filename, "wb") as outfile:
+                outfile.write(photo.getvalue())
+        else:
+            self._lapse_missed_frames += 1
+
+        photo.close()
 
     def _image_to_frame(self, image_bio: BytesIO):
         image_bio.seek(0)
@@ -788,13 +811,15 @@ class MjpegCamera(Camera):
             time_last_frame = time.time()
             while time.time() <= t_end:
                 st_time = time.time()
-                frame_loc = self.take_photo(force_rotate=False)
+                # Use _get_mjpeg_photo directly instead of async take_photo
+                frame_loc = self._get_mjpeg_photo(force_rotate=False)
                 logger.debug("take_video cam read  frame execution time: %s millis", (time.time() - st_time) * 1000)
                 if time.time() > time_last_frame + frame_time:
                     time_last_frame = time.time()
                     if frame_loc.getbuffer().nbytes > 0:
                         frame_loc.seek(0)
                         frame_list.append(frame_loc.read())
+                frame_loc.close()
                 del frame_loc
 
             res_fps = len(frame_list) / self._video_duration

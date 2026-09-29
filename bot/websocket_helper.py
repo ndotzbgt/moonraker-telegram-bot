@@ -159,9 +159,9 @@ class WebSocketHelper:
             if "timelapse create" in message_params:
                 self._timelapse.send_timelapse()
         if "timelapse photo_and_gcode" in message_params:
-            self._timelapse.take_lapse_photo(manually=True, gcode=True)
+            await self._timelapse.take_lapse_photo(manually=True, gcode=True)
         if "timelapse photo" in message_params:
-            self._timelapse.take_lapse_photo(manually=True)
+            await self._timelapse.take_lapse_photo(manually=True)
 
         message_params_loc = message_params[0]
         if message_params_loc.startswith("tgnotify "):
@@ -205,7 +205,7 @@ class WebSocketHelper:
             position_z = message_params_loc["gcode_move"]["gcode_position"][2]
             self._klippy.printing_height = position_z
             self._notifier.schedule_notification(position_z=int(position_z))
-            self._timelapse.take_lapse_photo(position_z)
+            await self._timelapse.take_lapse_photo(position_z)
 
         if "virtual_sdcard" in message_params_loc and "progress" in message_params_loc["virtual_sdcard"]:
             self._klippy.vsd_progress = message_params_loc["virtual_sdcard"]["progress"]

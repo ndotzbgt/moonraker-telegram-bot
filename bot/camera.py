@@ -3,6 +3,7 @@ import functools
 from functools import wraps
 import glob
 from io import BytesIO
+import json
 import logging
 import math
 import os
@@ -11,9 +12,10 @@ from pathlib import Path
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from datetime import timedelta
 from typing import List, Tuple
 
-from PIL import Image, _webp  # type: ignore
+from PIL import Image, ImageDraw, ImageFont, _webp  # type: ignore
 from assets.ffmpegcv_custom import FFmpegReaderStreamRTCustomInit  # type: ignore
 import ffmpegcv  # type: ignore
 from ffmpegcv import FFmpegReader
@@ -94,6 +96,9 @@ class Camera:
         self._stream_fps: int = config.camera.stream_fps
         self._klippy: Klippy = klippy
 
+        # Store timelapse config for overlay rendering
+        self._timelapse_config = config.timelapse
+
         # Todo: refactor into timelapse class
         self._base_dir: str = config.timelapse.base_dir
         self._ready_dir: str = config.timelapse.ready_dir
@@ -141,6 +146,18 @@ class Camera:
         self._lapse_missed_frames: int = 0
 
         self._executor: ThreadPoolExecutor = ThreadPoolExecutor(1, thread_name_prefix="camera_pool")
+
+        # Load overlay font
+        self._overlay_font_path = None
+        font_paths = [
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/TTF/DejaVuSans.ttf",
+            os.path.join(os.path.dirname(__file__), "assets", "DejaVuSans.ttf"),
+        ]
+        for path in font_paths:
+            if os.path.exists(path):
+                self._overlay_font_path = path
+                break
 
         if logging_handler:
             logger.addHandler(logging_handler)
@@ -262,6 +279,17 @@ class Camera:
             return True
         except ValueError:
             return False
+
+    @staticmethod
+    def _format_duration(seconds: float) -> str:
+        if seconds <= 0:
+            return "--:--"
+        td = timedelta(seconds=int(seconds))
+        hours, rem = divmod(td.seconds, 3600)
+        minutes, _ = divmod(rem, 60)
+        if td.days > 0:
+            return f"{td.days}d {hours:02d}:{minutes:02d}"
+        return f"{hours:02d}:{minutes:02d}"
 
     def _set_cv2_params(self):
         self.cam_cam.set(cv2.CAP_PROP_BUFFERSIZE, 1)
@@ -553,6 +581,20 @@ class Camera:
             odd_frames = math.ceil(lapse_fps / self._target_fps)
             lapse_fps = self._target_fps
 
+        # Load overlay config from timelapse
+        overlay_cfg = self._timelapse_config
+        overlay_enabled = overlay_cfg.overlay_enabled if overlay_cfg else False
+
+        # Load font
+        font = None
+        if overlay_enabled and self._overlay_font_path:
+            try:
+                font = ImageFont.truetype(self._overlay_font_path, overlay_cfg.overlay_font_size)
+            except Exception:
+                font = ImageFont.load_default()
+        elif overlay_enabled:
+            font = ImageFont.load_default()
+
         with self._camera_lock:
             out = ffmpegcv.VideoWriter(
                 video_filepath,
@@ -573,7 +615,88 @@ class Camera:
                     last_update_time = time.time()
 
                 if not self._limit_fps or fnum % odd_frames == 0:
-                    out.write(self._get_frame(filename))
+                    frame = self._get_frame(filename)
+
+                    # Apply overlay if enabled
+                    if overlay_enabled:
+                        # Load metadata sidecar
+                        meta_file = filename.replace(f".{self._raw_frame_extension}", ".json")
+                        meta = {}
+                        if os.path.exists(meta_file):
+                            try:
+                                with open(meta_file, "r") as f:
+                                    meta = json.load(f)
+                            except Exception:
+                                meta = {}
+
+                        # Convert frame to PIL Image
+                        pil_img = Image.fromarray(frame[:, :, [2, 1, 0]])
+                        draw = ImageDraw.Draw(pil_img)
+
+                        # Build overlay lines
+                        lines = []
+                        if overlay_cfg.overlay_show_progress and "progress" in meta:
+                            pct = meta["progress"]
+                            blocks = int(pct * 20)
+                            lines.append(f"{int(pct * 100)}% {'█' * blocks}{'░' * (20 - blocks)}")
+
+                        if overlay_cfg.overlay_show_layer and "current_layer" in meta:
+                            total = meta.get("total_layers", "?")
+                            lines.append(f"Layer {meta['current_layer']}/{total}")
+
+                        if overlay_cfg.overlay_show_time:
+                            elapsed = self._format_duration(meta.get("printing_duration", 0))
+                            total_est = self._format_duration(meta.get("file_estimated_time", 0))
+                            lines.append(f"{elapsed} / {total_est}")
+
+                        if overlay_cfg.overlay_show_clock:
+                            tz = self._klippy._timezone
+                            now = datetime.now(tz) if tz else datetime.now()
+                            lines.append(now.strftime("%H:%M:%S"))
+
+                        if overlay_cfg.overlay_show_temps:
+                            temp_parts = []
+                            if "extruder_temp" in meta:
+                                temp_parts.append(f"E:{meta['extruder_temp']:.0f}°C")
+                            if "bed_temp" in meta:
+                                temp_parts.append(f"B:{meta['bed_temp']:.0f}°C")
+                            if "chamber_temp" in meta and meta.get("chamber_temp", 0) > 0.5:
+                                temp_parts.append(f"C:{meta['chamber_temp']:.0f}°C")
+                            if temp_parts:
+                                lines.append("  ".join(temp_parts))
+
+                        # Calculate position (bottom-left)
+                        padding = overlay_cfg.overlay_padding
+                        line_height = overlay_cfg.overlay_font_size + overlay_cfg.overlay_line_spacing
+                        start_y = pil_img.height - (len(lines) * line_height) - padding
+
+                        # Load font
+                        if not hasattr(self, '_overlay_font'):
+                            if self._overlay_font_path:
+                                try:
+                                    self._overlay_font = ImageFont.truetype(self._overlay_font_path, overlay_cfg.overlay_font_size)
+                                except Exception:
+                                    self._overlay_font = ImageFont.load_default()
+                            else:
+                                self._overlay_font = ImageFont.load_default()
+
+                        font = self._overlay_font
+
+                        for i, line in enumerate(lines):
+                            x = overlay_cfg.overlay_padding
+                            y = start_y + i * (overlay_cfg.overlay_font_size + overlay_cfg.overlay_line_spacing)
+
+                            if overlay_cfg.overlay_background:
+                                bbox = draw.textbbox((x, y), line, font=font)
+                                bg_rect = [bbox[0] - 4, bbox[1] - 2, bbox[2] + 4, bbox[3] + 2]
+                                draw.rectangle(bg_rect, fill=(0, 0, 0, overlay_cfg.overlay_opacity))
+
+                            draw.text((x, y), line, font=font, fill=(255, 255, 255, 255))
+
+                        # Convert back to numpy (RGB -> BGR for ffmpegcv)
+                        frame = numpy.array(pil_img)[:, :, [2, 1, 0]]
+
+                    out.write(frame)
                     frames_recorded += 1
                 else:
                     frames_skipped += 1

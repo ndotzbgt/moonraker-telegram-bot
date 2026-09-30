@@ -1,7 +1,11 @@
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import gc
+import json
 import logging
+import os
+import time
+from datetime import timedelta
 
 from apscheduler.schedulers.base import BaseScheduler  # type: ignore
 from telegram import Bot, Message
@@ -53,6 +57,7 @@ class Timelapse:
 
         self._klippy: Klippy = klippy
         self._camera: Camera = camera
+        self._timelapse_config = config.timelapse
 
         # push params to cameras instances
         self._camera.target_fps = self._target_fps
@@ -203,11 +208,25 @@ class Timelapse:
 
         gcode_command = self._after_photo_gcode if gcode and self._after_photo_gcode else ""
 
+        # Collect metadata for overlay before taking photo
+        metadata = self._collect_metadata()
+        lapse_dir = self._camera.lapse_dir
+
         if self._height > 0.0 and (position_z >= self._last_height + self._height or 0.0 < position_z < self._last_height - self._height):
             await self._camera.take_lapse_photo(gcode=gcode_command)
             self._last_height = position_z
         elif position_z < -1000:
             await self._camera.take_lapse_photo(gcode=gcode_command)
+
+        # Save metadata sidecar after photo is taken
+        if metadata:
+            timestamp = int(time.time() * 1000)
+            meta_file = os.path.join(lapse_dir, f"{timestamp}.json")
+            try:
+                with open(meta_file, "w") as f:
+                    json.dump(metadata, f)
+            except Exception as ex:
+                logger.warning("Failed to save timelapse metadata: %s", ex)
 
     async def take_test_lapse_photo(self) -> None:
         await self._camera.take_lapse_photo()
@@ -227,6 +246,26 @@ class Timelapse:
     def _remove_timelapse_timer(self) -> None:
         if self._sched.get_job("timelapse_timer"):
             self._sched.remove_job("timelapse_timer")
+
+    def _collect_metadata(self) -> dict:
+        """Collect metadata for timelapse overlay."""
+        try:
+            total_layers = self._klippy.get_total_layers()
+        except Exception:
+            total_layers = 0
+
+        metadata = {
+            "timestamp": time.time(),
+            "progress": self._klippy.printing_progress,
+            "current_layer": self._klippy.current_layer,
+            "total_layers": total_layers,
+            "printing_duration": self._klippy.printing_duration,
+            "file_estimated_time": self._klippy.file_estimated_time,
+            "extruder_temp": self._klippy.get_temperature("extruder"),
+            "bed_temp": self._klippy.get_temperature("heater_bed"),
+            "chamber_temp": self._klippy.get_temperature("chamber"),
+        }
+        return metadata
 
     def _reschedule_timelapse_timer(self) -> None:
         if self._interval > 0 and self._sched.get_job("timelapse_timer"):

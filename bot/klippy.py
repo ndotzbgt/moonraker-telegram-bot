@@ -606,6 +606,43 @@ class Klippy:
     async def start_printing_file(self, filename: str) -> bool:
         return (await self.make_request("POST", f"/printer/print/start?filename={urllib.parse.quote(filename)}")).is_success
 
+    def get_total_layers(self) -> int:
+        """Get total layers from file metadata or slicer info."""
+        if hasattr(self, '_cached_total_layers'):
+            return self._cached_total_layers
+
+        # Try file metadata
+        try:
+            resp = self.make_request_sync("GET", f"/server/files/metadata?filename={urllib.parse.quote(self.printing_filename)}")
+            if resp.is_success:
+                data = orjson.loads(resp.text)["result"]
+                if "total_layer" in data:
+                    self._cached_total_layers = data["total_layer"]
+                    return self._cached_total_layers
+        except Exception:
+            pass
+
+        # Fallback: try from slicer info if available
+        try:
+            resp = self.make_request_sync("GET", "/printer/objects/query?print_stats")
+            if resp.is_success:
+                data = orjson.loads(resp.text)["result"]["status"]["print_stats"]
+                if "info" in data and "total_layer" in data["info"]:
+                    self._cached_total_layers = data["info"]["total_layer"]
+                    return self._cached_total_layers
+        except Exception:
+            pass
+
+        return 0
+
+    def get_temperature(self, sensor: str) -> float:
+        """Get current temperature for a sensor."""
+        sensor_lower = sensor.lower()
+        for name, data in self._sensors_dict.items():
+            if sensor.lower() in name.lower() and "temperature" in data:
+                return data["temperature"]
+        return 0.0
+
     def stop_all(self) -> None:
         self._reset_file_info()
 

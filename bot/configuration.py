@@ -339,6 +339,18 @@ class TimelapseConfig(ConfigHelper):
         "after_photo_gcode",
         "save_lapse_photos_as_images",
         "raw_compressed",
+        "overlay_enabled",
+        "overlay_position",
+        "overlay_font_size",
+        "overlay_line_spacing",
+        "overlay_padding",
+        "overlay_show_progress",
+        "overlay_show_layer",
+        "overlay_show_time",
+        "overlay_show_temps",
+        "overlay_show_clock",
+        "overlay_background",
+        "overlay_opacity",
     ]
 
     def __init__(self, config: configparser.ConfigParser):
@@ -359,6 +371,18 @@ class TimelapseConfig(ConfigHelper):
         self.mode_manual: bool = self._get_boolean("manual_mode", default=False)
         self.after_photo_gcode: str = self._get_str("after_photo_gcode", default="")
         self.save_lapse_photos_as_images: bool = self._get_boolean("save_lapse_photos_as_images", default=False)
+        self.overlay_enabled: bool = self._get_boolean("overlay_enabled", default=True)
+        self.overlay_position: str = self._get_str("overlay_position", default="bottom-left", allowed_values=["bottom-left", "bottom-right", "top-left", "top-right"])
+        self.overlay_font_size: int = self._get_int("overlay_font_size", default=18, min_value=10, max_value=48)
+        self.overlay_line_spacing: int = self._get_int("overlay_line_spacing", default=4, min_value=0)
+        self.overlay_padding: int = self._get_int("overlay_padding", default=10, min_value=0)
+        self.overlay_show_progress: bool = self._get_boolean("overlay_show_progress", default=True)
+        self.overlay_show_layer: bool = self._get_boolean("overlay_show_layer", default=True)
+        self.overlay_show_time: bool = self._get_boolean("overlay_show_time", default=True)
+        self.overlay_show_temps: bool = self._get_boolean("overlay_show_temps", default=True)
+        self.overlay_show_clock: bool = self._get_boolean("overlay_show_clock", default=True)
+        self.overlay_background: bool = self._get_boolean("overlay_background", default=True)
+        self.overlay_opacity: int = self._get_int("overlay_opacity", default=180, min_value=0, max_value=255)
 
         self._init_paths()
 

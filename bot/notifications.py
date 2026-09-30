@@ -44,6 +44,10 @@ class Notifier:
         self._interval: int = config.notifications.interval
         self._notify_groups: List[Tuple[int, Optional[int]]] = config.notifications.notify_groups
         self._group_only: bool = config.notifications.group_only
+        self._first_layer_notify: bool = config.notifications.first_layer_notify
+        self._first_layer_count: int = config.notifications.first_layer_count
+        self._first_layer_height: float = config.notifications.first_layer_height
+        self._first_layer_time: int = config.notifications.first_layer_time
         self._max_upload_file_size: int = config.bot_config.max_upload_file_size
 
         self._progress_update_message = config.telegram_ui.progress_update_message
@@ -58,6 +62,9 @@ class Notifier:
         self._last_percent: int = 0
         self._last_m117_status: str = ""
         self._last_tgnotify_status: str = ""
+
+        self._first_layer_active: bool = False
+        self._first_layer_notified: set = set()
 
         self._status_message: Optional[Message] = None
         self._bzz_mess_id: int = 0
@@ -328,6 +335,8 @@ class Notifier:
         self._klippy.printing_duration = 0
         self._last_m117_status = ""
         self._last_tgnotify_status = ""
+        self._first_layer_active = True
+        self._first_layer_notified = set()
         self._status_message = None
         self._groups_status_mesages = {}
         if self._bzz_mess_id != 0:
@@ -368,24 +377,48 @@ class Notifier:
                 replace_existing=False,
             )
 
-    def schedule_notification(self, progress: int = 0, position_z: int = 0) -> None:
-        if not self._klippy.printing or (self._height == 0 and self._percent == 0):
+    def schedule_notification(self, progress: int = 0, position_z: int = 0, current_layer: int = 0) -> None:
+        if not self._klippy.printing:
+            return
+
+        # Check first layer phase transition
+        if self._first_layer_notify and self._first_layer_active:
+            if current_layer >= self._first_layer_count:
+                self._first_layer_active = False
+                logger.info(f"First layer monitoring phase ended at layer {current_layer}")
+
+        # Determine active thresholds
+        if self._first_layer_notify and self._first_layer_active:
+            active_percent = 0  # Disable percent-based during first layers
+            active_height = self._first_layer_height
+            active_time = self._first_layer_time
+        else:
+            active_percent = self._percent
+            active_height = self._height
+            active_time = self._interval
+
+        if active_percent == 0 and active_height == 0 and active_time == 0:
             return
 
         notify = False
-        if progress != 0 and self._percent != 0:
+        if progress != 0 and active_percent != 0:
             if progress < self._last_percent:
                 self._last_percent = progress
-            # Notify at each interval step (handles progress jumps correctly)
-            while progress >= self._last_percent + self._percent:
-                self._last_percent += self._percent
+            while progress >= self._last_percent + active_percent:
+                self._last_percent += active_percent
                 notify = True
 
-        if position_z != 0 and self._height != 0:
+        if position_z != 0 and active_height != 0:
             if position_z < self._last_height:
                 self._last_height = position_z
-            while position_z >= self._last_height + self._height:
-                self._last_height += self._height
+            while position_z >= self._last_height + active_height:
+                self._last_height += active_height
+                notify = True
+
+        # First layer specific: notify on each new layer
+        if self._first_layer_notify and self._first_layer_active and current_layer > 0:
+            if current_layer not in self._first_layer_notified:
+                self._first_layer_notified.add(current_layer)
                 notify = True
 
         if notify:

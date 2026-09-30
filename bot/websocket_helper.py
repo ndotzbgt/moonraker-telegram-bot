@@ -197,7 +197,10 @@ class WebSocketHelper:
                 self._notifier.m117_status = message_params_loc["display_status"]["message"]
             if "progress" in message_params_loc["display_status"]:
                 self._klippy.printing_progress = message_params_loc["display_status"]["progress"]
-                self._notifier.schedule_notification(progress=int(message_params_loc["display_status"]["progress"] * 100))
+                self._notifier.schedule_notification(
+                    progress=int(message_params_loc["display_status"]["progress"] * 100),
+                    current_layer=self._klippy.current_layer
+                )
 
         if "toolhead" in message_params_loc and "position" in message_params_loc["toolhead"]:
             # position_z = json_message["params"][0]['toolhead']['position'][2]
@@ -205,7 +208,10 @@ class WebSocketHelper:
         if "gcode_move" in message_params_loc and "gcode_position" in message_params_loc["gcode_move"]:
             position_z = message_params_loc["gcode_move"]["gcode_position"][2]
             self._klippy.printing_height = position_z
-            self._notifier.schedule_notification(position_z=int(position_z))
+            self._notifier.schedule_notification(
+                position_z=int(position_z),
+                current_layer=self._klippy.current_layer
+            )
             await self._timelapse.take_lapse_photo(position_z)
 
         if "virtual_sdcard" in message_params_loc and "progress" in message_params_loc["virtual_sdcard"]:
@@ -243,6 +249,8 @@ class WebSocketHelper:
             await self._klippy.set_printing_filename(print_stats_loc["filename"])
         if "filament_used" in print_stats_loc:
             self._klippy.filament_used = print_stats_loc["filament_used"]
+        if "info" in print_stats_loc and "current_layer" in print_stats_loc["info"]:
+            self._klippy.current_layer = print_stats_loc["info"]["current_layer"]
         if "state" in print_stats_loc:
             state = print_stats_loc["state"]
         # Fixme: reset notify percent & height on finish/cancel/start

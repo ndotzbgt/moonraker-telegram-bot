@@ -286,7 +286,7 @@ class CameraConfig(ConfigHelper):
 
 class NotifierConfig(ConfigHelper):
     _section = "progress_notification"
-    _KNOWN_ITEMS = ["percent", "height", "time", "groups", "group_only"]
+    _KNOWN_ITEMS = ["percent", "height", "time", "groups", "group_only", "first_layer_notify", "first_layer_count", "first_layer_height", "first_layer_time"]
 
     def __init__(self, config: configparser.ConfigParser):
         super().__init__(config)
@@ -296,6 +296,10 @@ class NotifierConfig(ConfigHelper):
         self.interval: int = self._get_int("time", default=0, min_value=0)
         self.notify_groups: List[Tuple[int, Optional[int]]] = self._get_groups_list()
         self.group_only: bool = self._get_boolean("group_only", default=False)
+        self.first_layer_notify: bool = self._get_boolean("first_layer_notify", default=False)
+        self.first_layer_count: int = self._get_int("first_layer_count", default=3, min_value=1)
+        self.first_layer_height: float = self._get_float("first_layer_height", default=0.5, min_value=0.0)
+        self.first_layer_time: int = self._get_int("first_layer_time", default=60, min_value=0)
 
     def _get_groups_list(self) -> List[Tuple[int, Optional[int]]]:
         els = [self._get_group_with_thread_id(el) for el in self._get_list("groups", default=[], el_type=str)]

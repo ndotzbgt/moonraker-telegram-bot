@@ -125,6 +125,7 @@ class Klippy:
         self.file_estimated_time: float = 0.0
         self.file_print_start_time: float = 0.0
         self.vsd_progress: float = 0.0
+        self.current_layer: int = 0
 
         self.filament_used: float = 0.0
         self.filament_total: float = 0.0

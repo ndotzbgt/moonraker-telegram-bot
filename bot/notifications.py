@@ -178,56 +178,62 @@ class Notifier:
 
     async def _send_photo(self, group_only, manual, message, silent):
         photo = await self._cam_wrap.take_photo()
-        if not group_only:
-            await self._bot.send_chat_action(chat_id=self._chat_id, action=ChatAction.UPLOAD_PHOTO)
-            if self._status_message and not manual:
-                if self._bzz_mess_id != 0:
-                    try:
-                        await self._bot.delete_message(self._chat_id, self._bzz_mess_id)
-                    except BadRequest as badreq:
-                        logger.warning("Failed deleting bzz message \n%s", badreq)
-                        self._bzz_mess_id = 0
+        try:
+            if not group_only:
+                await self._bot.send_chat_action(chat_id=self._chat_id, action=ChatAction.UPLOAD_PHOTO)
+                if self._status_message and not manual:
+                    if self._bzz_mess_id != 0:
+                        try:
+                            await self._bot.delete_message(self._chat_id, self._bzz_mess_id)
+                        except BadRequest as badreq:
+                            logger.warning("Failed deleting bzz message \n%s", badreq)
+                            self._bzz_mess_id = 0
 
-                # Fixme: check if media in message!
-                await self._status_message.edit_media(media=InputMediaPhoto(photo))
-                await self._status_message.edit_caption(caption=message, parse_mode=ParseMode.MARKDOWN_V2)
+                    # Fixme: check if media in message!
+                    photo.seek(0)
+                    await self._status_message.edit_media(media=InputMediaPhoto(photo))
+                    await self._status_message.edit_caption(caption=message, parse_mode=ParseMode.MARKDOWN_V2)
 
-                if self._progress_update_message:
-                    mes = await self._bot.send_message(self._chat_id, text="Status has been updated\nThis message will be deleted", disable_notification=silent)
-                    self._bzz_mess_id = mes.message_id
+                    if self._progress_update_message:
+                        mes = await self._bot.send_message(self._chat_id, text="Status has been updated\nThis message will be deleted", disable_notification=silent)
+                        self._bzz_mess_id = mes.message_id
 
-            else:
-                sent_message = await self._bot.send_photo(
-                    self._chat_id,
-                    photo=photo,
-                    caption=message,
-                    parse_mode=ParseMode.MARKDOWN_V2,
-                    disable_notification=silent,
-                )
-                if not self._status_message and not manual:
-                    self._status_message = sent_message
+                else:
+                    photo.seek(0)
+                    sent_message = await self._bot.send_photo(
+                        self._chat_id,
+                        photo=photo,
+                        caption=message,
+                        parse_mode=ParseMode.MARKDOWN_V2,
+                        disable_notification=silent,
+                    )
+                    if not self._status_message and not manual:
+                        self._status_message = sent_message
 
-        for group, message_thread_id in self._notify_groups:
-            photo.seek(0)
-            await self._bot.send_chat_action(chat_id=group, message_thread_id=message_thread_id, action=ChatAction.UPLOAD_PHOTO)
-            if group in self._groups_status_mesages and not manual:
-                mess = self._groups_status_mesages[group]
-                await mess.edit_media(media=InputMediaPhoto(photo))
-                await mess.edit_caption(caption=message, parse_mode=ParseMode.MARKDOWN_V2)
-            else:
-                sent_message = await self._bot.send_photo(
-                    chat_id=group,
-                    message_thread_id=message_thread_id,
-                    photo=photo,
-                    caption=message,
-                    parse_mode=ParseMode.MARKDOWN_V2,
-                    disable_notification=silent,
-                )
-                if group in self._groups_status_mesages or manual:
-                    continue
-                self._groups_status_mesages[group] = sent_message
+            for group, message_thread_id in self._notify_groups:
+                photo.seek(0)
+                await self._bot.send_chat_action(chat_id=group, message_thread_id=message_thread_id, action=ChatAction.UPLOAD_PHOTO)
+                if group in self._groups_status_mesages and not manual:
+                    mess = self._groups_status_mesages[group]
+                    photo.seek(0)
+                    await mess.edit_media(media=InputMediaPhoto(photo))
+                    await mess.edit_caption(caption=message, parse_mode=ParseMode.MARKDOWN_V2)
+                else:
+                    photo.seek(0)
+                    sent_message = await self._bot.send_photo(
+                        chat_id=group,
+                        message_thread_id=message_thread_id,
+                        photo=photo,
+                        caption=message,
+                        parse_mode=ParseMode.MARKDOWN_V2,
+                        disable_notification=silent,
+                    )
+                    if group in self._groups_status_mesages or manual:
+                        continue
+                    self._groups_status_mesages[group] = sent_message
 
-        photo.close()
+        finally:
+            photo.close()
 
     async def _notify(self, message: str, silent: bool, group_only: bool = False, manual: bool = False, finish: bool = False) -> None:
         try:
@@ -236,7 +242,9 @@ class Notifier:
             else:
                 await self._send_photo(group_only, manual, message, silent)
         except Exception as ex:
-            logger.error(ex)
+            logger.error("Notification failed: %s", ex, exc_info=True)
+            # Re-raise to trigger APScheduler retry/misfire handling
+            raise
         finally:
             if finish:
                 await self.reset_notifications()
@@ -366,17 +374,18 @@ class Notifier:
 
         notify = False
         if progress != 0 and self._percent != 0:
-            if progress < self._last_percent - self._percent:
+            if progress < self._last_percent:
                 self._last_percent = progress
-            if progress % self._percent == 0 and progress > self._last_percent:
-                self._last_percent = progress
+            # Notify at each interval step (handles progress jumps correctly)
+            while progress >= self._last_percent + self._percent:
+                self._last_percent += self._percent
                 notify = True
 
         if position_z != 0 and self._height != 0:
-            if position_z < self._last_height - self._height:
+            if position_z < self._last_height:
                 self._last_height = position_z
-            if position_z % self._height == 0 and position_z > self._last_height:
-                self._last_height = position_z
+            while position_z >= self._last_height + self._height:
+                self._last_height += self._height
                 notify = True
 
         if notify:

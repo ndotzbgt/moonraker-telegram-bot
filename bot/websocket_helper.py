@@ -105,6 +105,7 @@ class WebSocketHelper:
     async def reshedule(self):
         if not self._klippy.connected and self._ws.state is State.OPEN:
             await self.on_open()
+            await self.subscribe()
 
     async def stop_all(self):
         self._klippy.stop_all()

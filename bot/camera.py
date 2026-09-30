@@ -139,6 +139,8 @@ class Camera:
 
         self._lapse_missed_frames: int = 0
 
+        self._executor: ThreadPoolExecutor = ThreadPoolExecutor(1, thread_name_prefix="camera_pool")
+
         if logging_handler:
             logger.addHandler(logging_handler)
         if config.bot_config.debug:
@@ -288,15 +290,14 @@ class Camera:
         self._set_cv2_params()
         cv2.setNumThreads(self._threads)
 
-    @cam_light_toggle
-    async def _take_raw_frame(self, rgb: bool = True) -> ndarray:
-        await asyncio.sleep(0)  # Yield control to event loop
+    def _take_raw_frame_sync(self, rgb: bool = True) -> ndarray:
+        """Blocking OpenCV operations - runs in executor"""
         with self._camera_lock:
             st_time = time.time()
             self._init_cam()
             success, image = self.cam_cam.read()
             self.cam_cam.release()
-            logger.debug("_take_raw_frame cam read execution time: %s millis", (time.time() - st_time) * 1000)
+            logger.debug("_take_raw_frame_sync cam read execution time: %s millis", (time.time() - st_time) * 1000)
 
             if not success:
                 logger.debug("failed to get camera frame for photo")
@@ -306,7 +307,6 @@ class Camera:
                     img.close()
                     del img
                 else:
-                    # image is None
                     return numpy.empty(0)
             else:
                 if self._flip_vertically:
@@ -322,6 +322,12 @@ class Camera:
             del image, success
 
         return ndaarr
+
+    @cam_light_toggle
+    async def _take_raw_frame(self, rgb: bool = True) -> ndarray:
+        """Non-blocking wrapper - offloads to executor"""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self._executor, self._take_raw_frame_sync, rgb)
 
     async def take_photo(self, ndarr: ndarray = None) -> BytesIO:
         if ndarr is not None:
@@ -357,7 +363,7 @@ class Camera:
     @cam_light_toggle
     async def take_video(self) -> Tuple[BytesIO, BytesIO, int, int]:
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, self._take_video_sync)
+        return await loop.run_in_executor(self._executor, self._take_video_sync)
 
     def _take_video_sync(self) -> Tuple[BytesIO, BytesIO, int, int]:
         def process_video_frame(frame_local):
@@ -464,16 +470,25 @@ class Camera:
             photo = await self.take_photo(raw_frame_rgb)
             # Fixme: jpeg_low is bad file extension!
             filename = f"{self.lapse_dir}/{time.time()}.{self._img_extension}"
-            with open(filename, "wb") as outfile:
-                outfile.write(photo.getvalue())
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(self._executor, self._save_lapse_photo, photo, filename)
             photo.close()
 
         raw_frame_rgb = None
         del raw_frame, raw_frame_rgb
 
+    def _save_lapse_photo(self, photo: BytesIO, filename: str) -> None:
+        """Sync file write - runs in executor"""
+        with open(filename, "wb") as outfile:
+            outfile.write(photo.getvalue())
+
+    def shutdown(self) -> None:
+        """Shutdown camera's thread pool"""
+        self._executor.shutdown(wait=False)
+
     async def create_timelapse(self, printing_filename: str, gcode_name: str, info_mess: Message) -> Tuple[bytes, bytes, int, int, str, str]:
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, functools.partial(self._create_timelapse, printing_filename, gcode_name, info_mess, loop))
+        return await loop.run_in_executor(self._executor, functools.partial(self._create_timelapse, printing_filename, gcode_name, info_mess, loop))
 
     def _calculate_fps(self, frames_count: int) -> int:
         actual_duration = frames_count / self._target_fps
@@ -765,7 +780,7 @@ class MjpegCamera(Camera):
     @cam_light_toggle
     async def take_video(self) -> Tuple[BytesIO, BytesIO, int, int]:
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, self._take_video_sync)
+        return await loop.run_in_executor(self._executor, self._take_video_sync)
 
     def _get_mjpeg_photo(self, force_rotate: bool = False) -> BytesIO:
         bio = BytesIO()

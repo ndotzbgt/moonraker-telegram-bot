@@ -1374,4 +1374,5 @@ if __name__ == "__main__":
     bot_updater.job_queue.run_once(start_scheduler, 1)
     bot_updater.run_polling(allowed_updates=Update.ALL_TYPES)
 
+    cameraWrap.shutdown()
     logger.info("Shutting down the bot")

@@ -8,6 +8,10 @@ import threading
 import time
 from typing import List, Tuple
 import urllib
+try:
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+except ImportError:
+    from backports.zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from PIL import Image
 import emoji
@@ -99,6 +103,14 @@ class Klippy:
         self._show_private_macros: bool = config.telegram_ui.show_private_macros
         self._message_parts: List[str] = config.status_message_content.content
         self._eta_source: str = config.telegram_ui.eta_source
+        self._timezone_str: str = config.telegram_ui.timezone
+        self._timezone = None
+        if self._timezone_str:
+            try:
+                self._timezone = ZoneInfo(self._timezone_str)
+            except ZoneInfoNotFoundError:
+                logger.warning(f"Invalid timezone '{self._timezone_str}', using system local")
+                self._timezone = None
         self._light_device: PowerDevice
         self._psu_device: PowerDevice
         self._sensors_list: List[str] = config.status_message_content.sensors
@@ -299,7 +311,8 @@ class Klippy:
 
     @property
     def printing_filename_with_time(self) -> str:
-        return f"{self._printing_filename}_{datetime.fromtimestamp(self.file_print_start_time):%Y-%m-%d_%H-%M}"
+        tz = self._timezone if self._timezone else None
+        return f"{self._printing_filename}_{datetime.fromtimestamp(self.file_print_start_time, tz=tz):%Y-%m-%d_%H-%M}"
 
     def _get_full_marco_list(self) -> List[str]:
         macro_lines = list(filter(lambda it: "gcode_macro" in it, self._objects_list))
@@ -512,7 +525,8 @@ class Klippy:
         if "eta" in self._message_parts:
             message += f"Estimated time left: {eta}\n"
         if "finish_time" in self._message_parts:
-            message += f"Finish at {datetime.now() + eta:%Y-%m-%d %H:%M}\n"
+            now = datetime.now(self._timezone) if self._timezone else datetime.now()
+            message += f"Finish at {now + eta:%Y-%m-%d %H:%M}\n"
 
         return message
 

@@ -387,6 +387,7 @@ class TelegramUIConfig(ConfigHelper):
         "eta_source",
         "status_message_m117_update",
         "require_confirmation",
+        "timezone",
     ]
     _MESSAGE_CONTENT = [
         "progress",
@@ -430,6 +431,7 @@ class TelegramUIConfig(ConfigHelper):
         self.require_confirmation: List[str] = self._get_list(
             "require_confirmation", default=["logs", "logs_upload", "shutdown", "restart", "cancel", "fw_restart", "emergency", "reboot", "power", "bot_restart"]
         )
+        self.timezone: str = self._get_str("timezone", default="")
 
     def is_present_in_require_confirmation(self, command: str) -> bool:
         return command.strip() in self.require_confirmation

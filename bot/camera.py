@@ -10,6 +10,7 @@ import pathlib
 from pathlib import Path
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import List, Tuple
 
 from PIL import Image, _webp  # type: ignore
